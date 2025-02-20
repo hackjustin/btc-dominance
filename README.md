@@ -1,4 +1,3 @@
-# btc-dominance
 Monitoring and alerting on crypto markets
 
 ## BTC Dominance
