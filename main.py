@@ -13,7 +13,7 @@ DB_CONFIG = {
     "dbname": os.getenv("DB_NAME"),
     "user": os.getenv("DB_USER"),
     "password": os.getenv("DB_PASSWORD"),
-    "host": os.getenv("DB_HOST"),           
+    "host": os.getenv("DB_HOST"),            
     "port": os.getenv("DB_PORT")
 }
 
@@ -93,21 +93,26 @@ def store_alt_btc_strength(alt_data):
 # Fetch past data for ranking and accumulation detection
 def fetch_past_alt_data():
     past_data = {}
+    btc_dominance_trend = []
     with connect_db() as conn:
         with conn.cursor() as cur:
+            cur.execute("SELECT timestamp, btc_dominance FROM btc_dominance WHERE timestamp >= NOW() - INTERVAL '7 days'")
+            btc_dominance_trend = cur.fetchall()
             cur.execute("SELECT alt_id, alt_btc, volume FROM alt_btc_strength WHERE timestamp >= NOW() - INTERVAL '7 days'")
             rows = cur.fetchall()
             for alt_id, alt_btc, volume in rows:
                 if alt_id not in past_data:
                     past_data[alt_id] = []
                 past_data[alt_id].append((alt_btc, volume))
-    return past_data
+    return past_data, btc_dominance_trend
 
 # Identify ranking and accumulation
 def analyze_alts():
-    past_data = fetch_past_alt_data()
+    past_data, btc_dominance_trend = fetch_past_alt_data()
     rankings = {}
     accumulation_alerts = []
+    
+    btc_dominance_change = (btc_dominance_trend[-1][1] - btc_dominance_trend[0][1]) if len(btc_dominance_trend) >= 2 else 0
 
     for alt_id, records in past_data.items():
         if len(records) < 2:
@@ -117,7 +122,8 @@ def analyze_alts():
         avg_volume = sum(r[1] or 0 for r in records) / len(records)
         latest_volume = records[-1][1]
         price_change = (latest_price - initial_price) / initial_price
-        rankings[alt_id] = price_change
+        relative_strength = price_change - btc_dominance_change
+        rankings[alt_id] = relative_strength
         
         if latest_volume > avg_volume * ACCUMULATION_VOLUME_SPIKE:
             accumulation_alerts.append(f"{alt_id.upper()} shows accumulation! Volume spike: {latest_volume:.2f} (Avg: {avg_volume:.2f})")
@@ -140,8 +146,7 @@ def main():
     setup_database()
     send_alert("BTC Dominance Tracker Started.")
     send_telegram_alert("BTC Dominance Tracker Started.")
-    last_alt_values = {}
-
+    
     while True:
         btc_dominance = fetch_btc_dominance()
         alt_data = fetch_alt_btc_strength()
@@ -149,11 +154,7 @@ def main():
         if btc_dominance:
             print(f"{datetime.now()} - BTC Dominance: {btc_dominance:.2f}%")
             store_btc_dominance(btc_dominance)
-            if btc_dominance >= BTC_DOMINANCE_HIGH:
-                send_telegram_alert(f"BTC Dominance above {BTC_DOMINANCE_HIGH}%: {btc_dominance:.2f}%")
-            elif btc_dominance <= BTC_DOMINANCE_LOW:
-                send_telegram_alert(f"BTC Dominance below {BTC_DOMINANCE_LOW}%: {btc_dominance:.2f}%")
-        
+            
         if alt_data:
             store_alt_btc_strength(alt_data)
             top_alts, accumulation_alerts = analyze_alts()
