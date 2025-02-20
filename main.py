@@ -94,11 +94,12 @@ def store_alt_btc_strength(alt_data):
 def fetch_past_alt_data():
     past_data = {}
     btc_dominance_trend = []
+    time_threshold = datetime.now() - timedelta(days=7)
     with connect_db() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT timestamp, btc_dominance FROM btc_dominance WHERE timestamp >= NOW() - INTERVAL '7 days'")
+            cur.execute("SELECT timestamp, btc_dominance FROM btc_dominance WHERE timestamp >= %s", (time_threshold,))
             btc_dominance_trend = cur.fetchall()
-            cur.execute("SELECT alt_id, alt_btc, volume FROM alt_btc_strength WHERE timestamp >= NOW() - INTERVAL '7 days'")
+            cur.execute("SELECT alt_id, alt_btc, volume FROM alt_btc_strength WHERE timestamp >= %s", (time_threshold,))
             rows = cur.fetchall()
             for alt_id, alt_btc, volume in rows:
                 if alt_id not in past_data:
@@ -113,6 +114,7 @@ def analyze_alts():
     accumulation_alerts = []
     
     btc_dominance_change = (btc_dominance_trend[-1][1] - btc_dominance_trend[0][1]) if len(btc_dominance_trend) >= 2 else 0
+    btc_dominance_rising = btc_dominance_change > 0
 
     for alt_id, records in past_data.items():
         if len(records) < 2:
@@ -122,7 +124,7 @@ def analyze_alts():
         avg_volume = sum(r[1] or 0 for r in records) / len(records)
         latest_volume = records[-1][1]
         price_change = (latest_price - initial_price) / initial_price
-        relative_strength = price_change - btc_dominance_change
+        relative_strength = price_change - btc_dominance_change if btc_dominance_rising else price_change
         rankings[alt_id] = relative_strength
         
         if latest_volume > avg_volume * ACCUMULATION_VOLUME_SPIKE:
@@ -154,14 +156,15 @@ def main():
         if btc_dominance:
             print(f"{datetime.now()} - BTC Dominance: {btc_dominance:.2f}%")
             store_btc_dominance(btc_dominance)
-            
+            send_telegram_alert(f"BTC Dominance: {btc_dominance:.2f}%")
+        
         if alt_data:
             store_alt_btc_strength(alt_data)
             top_alts, accumulation_alerts = analyze_alts()
             send_telegram_alert(f"Top Alts: {', '.join(f'{alt.upper()} ({change:.2%})' for alt, change in top_alts)}")
             for alert in accumulation_alerts:
                 send_telegram_alert(alert)
-
+        
         time.sleep(300)
 
 if __name__ == "__main__":
